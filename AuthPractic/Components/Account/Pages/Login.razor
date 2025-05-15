@@ -1,0 +1,136 @@
+﻿@page "/Account/Login"
+@using System.ComponentModel.DataAnnotations
+@using System.IdentityModel.Tokens.Jwt
+@using System.Security.Claims
+@using System.Text
+@using AuthPractic.Data
+@using Microsoft.AspNetCore.Authentication
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.IdentityModel.Tokens
+
+@inject UserManager<ApplicationUser> UserManager
+@inject NavigationManager NavigationManager
+@inject IdentityRedirectManager RedirectManager
+@inject IConfiguration Configuration
+
+<PageTitle>Log in</PageTitle>
+
+<h1>Log in</h1>
+<div class="row">
+	<div class="col-md-4">
+		<section>
+			<StatusMessage Message="@errorMessage"/>
+			<EditForm Model="Input" method="post" OnValidSubmit="LoginUser" FormName="login">
+				<DataAnnotationsValidator/>
+				<h2>Use a local account to log in.</h2>
+				<hr/>
+				<ValidationSummary class="text-danger" role="alert"/>
+				<div class="form-floating mb-3">
+					<InputText @bind-Value="Input.Email" class="form-control" autocomplete="username" aria-required="true" placeholder="name@example.com"/>
+					<label for="email" class="form-label">Email</label>
+					<ValidationMessage For="() => Input.Email" class="text-danger"/>
+				</div>
+				<div class="form-floating mb-3">
+					<InputText type="password" @bind-Value="Input.Password" class="form-control" autocomplete="current-password" aria-required="true" placeholder="password"/>
+					<label for="password" class="form-label">Password</label>
+					<ValidationMessage For="() => Input.Password" class="text-danger"/>
+				</div>
+				<div class="checkbox mb-3">
+					<label class="form-label">
+						<InputCheckbox @bind-Value="Input.RememberMe" class="darker-border-checkbox form-check-input"/>
+						Remember me
+					</label>
+				</div>
+				<div>
+					<button type="submit" class="w-100 btn btn-lg btn-primary">Log in</button>
+				</div>
+				<div>
+					<p>
+						<a href="Account/ForgotPassword">Forgot your password?</a>
+					</p>
+					<p>
+						<a href="@(NavigationManager.GetUriWithQueryParameters("Account/Register", new Dictionary<string, object?> { ["ReturnUrl"] = ReturnUrl }))">Register as a new user</a>
+					</p>
+					<p>
+						<a href="Account/ResendEmailConfirmation">Resend email confirmation</a>
+					</p>
+				</div>
+			</EditForm>
+		</section>
+	</div>
+	<div class="col-md-6 col-md-offset-2">
+		<section>
+			<h3>Use another service to log in.</h3>
+			<hr/>
+			<ExternalLoginPicker/>
+		</section>
+	</div>
+</div>
+
+@code {
+	private string? errorMessage;
+	private string jwtKey = string.Empty;
+	private string jwtIssuer = string.Empty;
+	private string jwtAudience = string.Empty;
+
+	protected override void OnInitialized() {
+		jwtKey = Configuration["Jwt:Key"] ?? "[key not found]";
+		jwtIssuer = Configuration["Jwt:Issuer"] ?? "[issuer not found]";
+		jwtAudience = Configuration["Jwt:Audience"] ?? "[audience not found]";
+	}
+
+	[CascadingParameter] private HttpContext HttpContext { get; set; } = default!;
+
+	[SupplyParameterFromForm] private LoginModel Input { get; set; } = new();
+
+	[SupplyParameterFromQuery] private string? ReturnUrl { get; set; }
+
+	protected override async Task OnInitializedAsync() {
+		if (HttpMethods.IsGet(HttpContext.Request.Method)) {
+			// Clear the existing external cookie to ensure a clean login process
+			await HttpContext.SignOutAsync(IdentityConstants.ExternalScheme);
+		}
+	}
+
+	public async Task LoginUser() {
+		var user = await UserManager.FindByEmailAsync(Input.Email);
+		if (user == null || !await UserManager.CheckPasswordAsync(user, Input.Password)) {
+			errorMessage = "Unauthorized";
+			return;
+		}
+
+		if (!user.EmailConfirmed) {
+			errorMessage = "Email not confirmed.";
+			return;
+		}
+
+		var claims = new List<Claim> {
+			new(ClaimTypes.NameIdentifier, user.Id),
+			new(ClaimTypes.Email, user.Email),
+			new(ClaimTypes.Name, user.Email),
+			new(ClaimTypes.Role, "User")
+		};
+
+		var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
+		var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+		var token = new JwtSecurityToken(jwtIssuer,
+		                                 jwtAudience,
+		                                 claims,
+		                                 expires: DateTime.Now.AddDays(7),
+		                                 signingCredentials: creds);
+
+		var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
+
+		HttpContext.Response.Cookies.Append("AuthToken",
+		                                    tokenString,
+		                                    new CookieOptions {
+			                                    HttpOnly = true,
+			                                    Secure = true,
+			                                    SameSite = SameSiteMode.Strict,
+			                                    Expires = DateTimeOffset.UtcNow.AddDays(7)
+		                                    });
+
+		RedirectManager.RedirectTo(ReturnUrl);
+
+	}
+}

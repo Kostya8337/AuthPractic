@@ -1,0 +1,12 @@
+﻿version: '3.4'
+
+services:
+  authapp:
+    build: .
+    ports:
+      - "5000:80"
+    volumes:
+      - authdata:/app/Data
+
+volumes:
+  authdata:
